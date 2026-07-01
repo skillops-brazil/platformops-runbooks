@@ -1,0 +1,131 @@
+{
+  "name": "platformops-runbooks",
+  "version": "1.0.0",
+  "lastUpdate": "2026-07-01",
+  "minimumDesktopVersion": "0.14.0",
+  "breakingChanges": false,
+  "artifactCount": 20,
+  "fileCount": 24,
+  "files": [
+    {
+      "path": ".gitattributes",
+      "sha256": "d60f352d0db1404c70afb4bb8b2ca3fd1c610572aa40720e8a0b7baa7885418c",
+      "size": 19
+    },
+    {
+      "path": "CHANGELOG.md",
+      "sha256": "8d66dfb0970898df35eaf23398ab772bd2e2f7aa09659de0e2f2c3fbb75fd9c0",
+      "size": 868
+    },
+    {
+      "path": "README.md",
+      "sha256": "78fddbf40eed522a8551cb0b8199fc88a0165847605fb6fef67ea82c4de67292",
+      "size": 3759
+    },
+    {
+      "path": "runbooks/aws/eks-nodes-notready.md",
+      "sha256": "e32dc62db2407bb675bcca4d6719053ab956bc5b303e429f40ca076534850742",
+      "size": 4149
+    },
+    {
+      "path": "runbooks/aws/rds-connection-exhaustion.md",
+      "sha256": "0f06a1243685bc4275c9b5558060dff3d5f305ec7690c07f555fbced2aea12b8",
+      "size": 4122
+    },
+    {
+      "path": "runbooks/aws/sso-token-expired.md",
+      "sha256": "d8f2b5f7125498cdb827a1f2088b6d59d9dbaf151f3e71ac0799df8c3f4a7a26",
+      "size": 3288
+    },
+    {
+      "path": "runbooks/database/postgres-long-running-queries.md",
+      "sha256": "862376cb62703f1e7e1cccdf1eb9abdc353e9f29be848529a4cb40fdc38d3269",
+      "size": 4003
+    },
+    {
+      "path": "runbooks/database/postgres-replication-lag.md",
+      "sha256": "40ec1bf8689206d0135d85600068d35e47198f270bf808d1b1c56e1d06bce57a",
+      "size": 3702
+    },
+    {
+      "path": "runbooks/database/redis-memory-pressure.md",
+      "sha256": "921e45da0a4ea3f26b51679e805d395d14a369dbce16de3f54fa10edd08b953e",
+      "size": 3719
+    },
+    {
+      "path": "runbooks/incident/high-latency-api.md",
+      "sha256": "c031a8716179d2a4f3fa9520294258bcdc6f3bfa89aaccd79e154446215b4f32",
+      "size": 3853
+    },
+    {
+      "path": "runbooks/incident/incident-comms-bridge.md",
+      "sha256": "06092847db8572300ba011ce6d7b8e872329b8c4dc65ed1798b1786b5a56cb00",
+      "size": 3502
+    },
+    {
+      "path": "runbooks/kubernetes/crashloop-triage.md",
+      "sha256": "7bd6363d0d1fcb7aebd94da9ec0f1b47fc73c989ca664edf2e18fa9863ca62ea",
+      "size": 4011
+    },
+    {
+      "path": "runbooks/kubernetes/node-notready.md",
+      "sha256": "a690f1eb16afc63003988c754af6267ee7c8276f6c963b1daa67b78727b50780",
+      "size": 3686
+    },
+    {
+      "path": "runbooks/kubernetes/oomkilled-pod.md",
+      "sha256": "9981baf72eb7182c048ee769c2f598015e13865a6a1b1ad2fe07ef6c16e47538",
+      "size": 3672
+    },
+    {
+      "path": "runbooks/kubernetes/pvc-pending.md",
+      "sha256": "c58220225d2e7e2ecfa4b222ad54148cadb5e39e9b927497156a416fbe846040",
+      "size": 3246
+    },
+    {
+      "path": "runbooks/monitoring/alert-noise-triage.md",
+      "sha256": "75c1d23aecfa48e39f0a297c1d77586c756c9c8d16169e0e945b50fc2147ef02",
+      "size": 3319
+    },
+    {
+      "path": "runbooks/monitoring/missing-metrics.md",
+      "sha256": "0c895253c8bcb5f9ac3248c8836a212f1419b7142452e086d9108ce30d3d5c29",
+      "size": 3191
+    },
+    {
+      "path": "runbooks/network/dns-resolution-failure.md",
+      "sha256": "e324ec7e10f676ed0ab916b81fc4103feb1bb12e28510a59c6b4ff9dd27b523a",
+      "size": 3590
+    },
+    {
+      "path": "runbooks/network/tls-cert-expiry.md",
+      "sha256": "ba8b3028af78d545ea5f902acf450a8c767119cd7d8892ca76674e8f4307dacd",
+      "size": 3687
+    },
+    {
+      "path": "runbooks/observability/log-volume-spike.md",
+      "sha256": "eb19ea72590017e6947c14d6ae88a23013c2946b369dc3221df5781c78734ff2",
+      "size": 3046
+    },
+    {
+      "path": "runbooks/observability/trace-latency-hotspot.md",
+      "sha256": "cdf93f3d2a37a4bbff144b762150a7521a1a8d7f0cb76e2e055c45a9290dfe62",
+      "size": 3233
+    },
+    {
+      "path": "runbooks/security/leaked-credential-response.md",
+      "sha256": "476d0784278e70be984caa7062d3d397a6a1a296f0939bbc5c92c924aeee801d",
+      "size": 3508
+    },
+    {
+      "path": "runbooks/security/unauthorized-access-review.md",
+      "sha256": "372fdfb86dd09c1eebc602e7ea3540473813848e51a1f552d02f43a2f8624867",
+      "size": 3438
+    },
+    {
+      "path": "schemas/runbook.schema.md",
+      "sha256": "881b88b48f14604f0e6004a40920aeb716eaade47a1ff4f2dba4864ea9d225b7",
+      "size": 6090
+    }
+  ]
+}
