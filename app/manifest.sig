@@ -1,5 +1,5 @@
 {
-  "kid": "skillops-lib-1",
+  "kid": "skillops-lib-2",
   "alg": "ed25519",
-  "sig": "5N72o2m6edfVyY+pr4mtTMP1J5DvzrOCEoeo0Kk0mYjsa9/amS36nW1ka/5ZRaEg4u5kwZ9Uti+15vbASTu8AQ=="
+  "sig": "4BdvYjMAUL3V/3oEXBoq+XvbV0Q6epB4+6dCbt4GUB0R0agXtu1wp+LFKeNLgd/eLFk060EYPaKCgcuKyyF2BQ=="
 }

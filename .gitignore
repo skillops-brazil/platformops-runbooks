@@ -1,3 +1,10 @@
 # Artefato de release montado por scripts/build-compatible-library.mjs.
 # Derivado de app/ — nunca versionado, sempre reconstruído.
 dist/
+
+# Custódia de chaves. Só .keys/README.md e a pública são versionáveis;
+# a privada nunca. Ver docs/reference/KEY-MANAGEMENT.md.
+.keys/*
+!.keys/README.md
+*.pem
+!.keys/library-public.pem
