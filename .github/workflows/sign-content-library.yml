@@ -1,0 +1,305 @@
+# =============================================================================
+# Assinatura protegida da biblioteca de conteúdo.
+#
+# Contrato: docs/reference/CONTENT-LIBRARY-CONTRACT.md do workspace PlatformOps.
+#
+# ESTE WORKFLOW NÃO PUBLICA. Ele valida, assina e empacota; a publicação é um
+# ato separado e autorizado. Separar importa: assinar é reversível (basta não
+# publicar o artefato), publicar não é.
+#
+# Nunca roda em `pull_request`. A chave de produção só existe no environment
+# protegido `content-signing`, que exige aprovação — em PR o que roda é o
+# dry-run com chave efêmera, no workflow `manifest.yml`.
+# =============================================================================
+name: Assinar biblioteca de conteúdo
+
+on:
+  workflow_dispatch:
+    inputs:
+      library_version:
+        description: 'Versão esperada no manifest (ex.: 1.1.0). Falha se divergir.'
+        required: true
+        type: string
+      compatibility_mode:
+        description: 'Layout do artefato'
+        required: true
+        type: choice
+        options: [dual-layout, app-only]
+        default: dual-layout
+      dry_run:
+        description: 'Chave efêmera, artefato NÃO publicável'
+        required: true
+        type: boolean
+        default: true
+  # Chamável por uma pipeline coordenadora, para tratar as três bibliotecas
+  # como uma unidade — ver §10 do contrato.
+  workflow_call:
+    inputs:
+      library_version: { required: true, type: string }
+      compatibility_mode: { required: false, type: string, default: dual-layout }
+      dry_run: { required: false, type: boolean, default: true }
+    secrets:
+      LIBRARY_PRIVATE_KEY: { required: false }
+
+# Uma assinatura por vez. Duas execuções concorrentes produziriam dois artefatos
+# assinados da mesma versão, e não haveria como saber qual foi publicado.
+concurrency:
+  group: sign-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ── 1. VALIDAR — sem segredo algum ─────────────────────────────────────────
+  # Roda antes de qualquer contato com a chave. Código não confiável não deve
+  # executar depois que o secret entra no ambiente.
+  validar:
+    name: Validar manifest, conteúdo e versão
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      files: ${{ steps.v.outputs.files }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+
+      - name: Testes do gerador
+        run: node scripts/manifest.test.mjs
+
+      - name: Manifest em dia (schema, hashes, caminhos, sidecar)
+        run: node scripts/manifest.mjs --check
+
+      - name: Árvore limpa
+        # Assinar árvore suja assina algo que ninguém revisou.
+        run: git diff --exit-code
+
+      - name: .gitattributes normaliza fim de linha
+        run: |
+          set -euo pipefail
+          grep -qE '^\*\s+text=auto\s+eol=lf' .gitattributes \
+            || { echo "::error::.gitattributes não força eol=lf — hashes instáveis em Windows."; exit 1; }
+
+      - name: Sem CRLF no conteúdo publicável
+        run: |
+          set -euo pipefail
+          if grep -rlIU $'\r' app/ ; then
+            echo "::error::CRLF encontrado em app/ — os hashes não seriam reprodutíveis."; exit 1
+          fi
+
+      - name: Versão do manifest é a solicitada
+        id: v
+        env:
+          ESPERADA: ${{ inputs.library_version }}
+        run: |
+          set -euo pipefail
+          node -e '
+            const m = require("./app/manifest.json");
+            const esperada = process.env.ESPERADA;
+            if (m.version !== esperada) {
+              console.error(`::error::manifest v${m.version}, solicitado v${esperada}`);
+              process.exit(1);
+            }
+            console.log(`version=${m.version}`);
+            console.log(`files=${m.fileCount}`);
+          ' >> "$GITHUB_OUTPUT"
+
+      - name: Artefato dual monta (validação a seco)
+        run: node scripts/build-compatible-library.mjs --check
+
+  # ── 2. ASSINAR — o único job que vê a chave ────────────────────────────────
+  assinar:
+    name: Assinar e verificar
+    needs: validar
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Em execução produtiva, o environment exige aprovação humana. No dry-run
+    # nenhum secret é necessário, e o environment continua sendo o portão.
+    environment: ${{ inputs.dry_run && 'content-signing-dry-run' || 'content-signing' }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25.12'
+
+      # `librarysign` vive no repositório do Desktop. Clone raso e somente
+      # leitura: esta pipeline não altera o Desktop.
+      - name: Ferramenta de assinatura
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --quiet https://github.com/skillops-brazil/platformops.git .ferramenta
+
+      # ── material criptográfico ───────────────────────────────────────────
+      # O diretório fica FORA do workspace (`$RUNNER_TEMP`), com 0700, e o `trap`
+      # o apaga mesmo se um passo posterior falhar. Nada aqui entra em cache nem
+      # em artefato.
+      - name: Preparar chave
+        id: chave
+        env:
+          LIBRARY_PRIVATE_KEY: ${{ secrets.LIBRARY_PRIVATE_KEY }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          COFRE="$RUNNER_TEMP/cofre"
+          mkdir -p "$COFRE" && chmod 700 "$COFRE"
+          echo "COFRE=$COFRE" >> "$GITHUB_ENV"
+
+          if [ "$DRY_RUN" = "true" ]; then
+            # Chave EFÊMERA gerada aqui. Prova o processo, nunca a autenticidade.
+            ( cd .ferramenta/platformops-core/app \
+              && LIBRARY_PRIVATE_KEY_FILE="$COFRE/priv.key" \
+                 LIBRARY_PUBLIC_KEY_FILE="$COFRE/pub.key" \
+                 go run ./tools/librarysign keygen >/dev/null )
+            echo "classe=test" >> "$GITHUB_OUTPUT"
+          else
+            if [ -z "${LIBRARY_PRIVATE_KEY:-}" ]; then
+              echo "::error::secret LIBRARY_PRIVATE_KEY ausente no environment protegido."; exit 1
+            fi
+            # `printf` do valor direto para o arquivo: sem eco, sem argv.
+            umask 077
+            printf '%s' "$LIBRARY_PRIVATE_KEY" > "$COFRE/priv.key"
+            chmod 600 "$COFRE/priv.key"
+            echo "classe=production" >> "$GITHUB_OUTPUT"
+          fi
+          test "$(stat -c '%a' "$COFRE/priv.key")" = "600" \
+            || { echo "::error::permissão da chave não é 0600."; exit 1; }
+
+      # Deriva a pública da privada e confere contra o trust store do Desktop
+      # ANTES de assinar. Assinar com a chave errada produz um artefato que
+      # parece bom e que nenhum cliente aceita.
+      - name: Conferir kid e fingerprint contra o trust store
+        env:
+          KID_ESPERADO: skillops-lib-1
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("fs"), crypto = require("crypto");
+            const priv = Buffer.from(fs.readFileSync(process.env.COFRE + "/priv.key", "utf8").trim(), "base64");
+            if (priv.length !== 64) { console.error("::error::chave privada Ed25519 inválida"); process.exit(1) }
+            const pub = priv.subarray(32);           // Ed25519: os 32 bytes finais são a pública
+            const fp  = crypto.createHash("sha256").update(pub).digest("hex").slice(0, 16);
+
+            const src = fs.readFileSync(".ferramenta/platformops-core/app/content_sync.go", "utf8");
+            const confiada = /libraryPublicKeyB64\s*=\s*"([^"]+)"/.exec(src)[1];
+            const kid      = /libraryKeyID\s*=\s*"([^"]+)"/.exec(src)[1];
+
+            console.log("kid esperado :", process.env.KID_ESPERADO);
+            console.log("kid no código:", kid);
+            console.log("fingerprint  : sha256:" + fp + "…");
+
+            if (kid !== process.env.KID_ESPERADO) {
+              console.error("::error::kid do trust store diverge do esperado"); process.exit(1)
+            }
+            const bate = pub.toString("base64") === confiada;
+            if (process.env.DRY_RUN === "true") {
+              if (bate) { console.error("::error::dry-run gerou chave igual à de produção — impossível"); process.exit(1) }
+              console.log("dry-run: chave efêmera, NÃO corresponde ao trust store (esperado)");
+            } else if (!bate) {
+              console.error("::error::a chave fornecida NÃO corresponde à pública confiada pelo Desktop.");
+              console.error("::error::assinar produziria artefato que nenhum cliente aceita. Abortado.");
+              process.exit(1);
+            } else {
+              console.log("produção: chave corresponde ao trust store");
+            }
+          '
+
+      - name: Assinar app/manifest.json
+        run: |
+          set -euo pipefail
+          trap 'rm -rf "$COFRE"' EXIT
+          ( cd .ferramenta/platformops-core/app \
+            && LIBRARY_PRIVATE_KEY_FILE="$COFRE/priv.key" \
+               go run ./tools/librarysign sign "$GITHUB_WORKSPACE/app/manifest.json" )
+
+      - name: Verificar a assinatura recém-gerada
+        run: |
+          set -euo pipefail
+          trap 'rm -rf "$COFRE"' EXIT
+          ( cd .ferramenta/platformops-core/app \
+            && LIBRARY_PUBLIC_KEY_FILE="$COFRE/pub.key" \
+               go run ./tools/librarysign verify "$GITHUB_WORKSPACE/app/manifest.json" ) \
+            || { echo "::error::assinatura não verifica com a própria chave — abortado."; exit 1; }
+
+      - name: Apagar material criptográfico
+        if: always()
+        run: |
+          rm -rf "${COFRE:-$RUNNER_TEMP/cofre}"
+          test ! -e "${COFRE:-$RUNNER_TEMP/cofre}" && echo "cofre removido"
+
+      # ── empacotar ────────────────────────────────────────────────────────
+      - name: Montar artefato ${{ inputs.compatibility_mode }}
+        run: |
+          set -euo pipefail
+          node scripts/build-compatible-library.mjs
+          if [ "${{ inputs.compatibility_mode }}" = "app-only" ]; then
+            # Retirada do layout legado: só `app/` sobrevive no artefato.
+            find dist/library -maxdepth 1 -mindepth 1 ! -name app -exec rm -rf {} +
+            echo "layout legado removido do artefato (app-only)"
+          fi
+
+      - name: Reconstruir do zero e conferir determinismo
+        run: |
+          set -euo pipefail
+          mv dist/library dist/primeira
+          node scripts/build-compatible-library.mjs
+          diff -r dist/primeira dist/library \
+            || { echo "::error::a montagem não é determinística."; exit 1; }
+          rm -rf dist/primeira
+          echo "duas montagens byte a byte idênticas"
+
+      - name: Checksums do pacote
+        run: |
+          set -euo pipefail
+          ( cd dist/library && find . -type f -print0 | sort -z | xargs -0 sha256sum ) > dist/CHECKSUMS.txt
+          echo "$(wc -l < dist/CHECKSUMS.txt) arquivos no pacote"
+
+      - name: Rótulo de publicabilidade
+        run: |
+          set -euo pipefail
+          cat > dist/PROVENIENCIA.txt <<EOF
+          library=${{ github.repository }}
+          version=${{ needs.validar.outputs.version }}
+          files=${{ needs.validar.outputs.files }}
+          compatibility_mode=${{ inputs.compatibility_mode }}
+          signature_class=${{ steps.chave.outputs.classe }}
+          publishable=${{ steps.chave.outputs.classe == 'production' }}
+          commit=${{ github.sha }}
+          EOF
+          cat dist/PROVENIENCIA.txt
+
+      # Só material público sobe. A chave já foi apagada dois passos antes; o
+      # que vai aqui é manifest, assinatura destacada, conteúdo e checksums.
+      - name: Publicar artefato do run
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: biblioteca-${{ needs.validar.outputs.version }}-${{ steps.chave.outputs.classe }}
+          path: dist/
+          if-no-files-found: error
+          # Dry-run não deve sobreviver: é fácil confundir um artefato de teste
+          # com um publicável quando os dois ficam guardados por 90 dias.
+          retention-days: ${{ inputs.dry_run && 1 || 30 }}
+
+      - name: Resumo
+        run: |
+          {
+            echo "### Assinatura — ${{ github.repository }}"
+            echo ''
+            echo "| campo | valor |"
+            echo "|---|---|"
+            echo "| versão | ${{ needs.validar.outputs.version }} |"
+            echo "| arquivos | ${{ needs.validar.outputs.files }} |"
+            echo "| layout | ${{ inputs.compatibility_mode }} |"
+            echo "| classe da assinatura | ${{ steps.chave.outputs.classe }} |"
+            echo "| publicável | ${{ steps.chave.outputs.classe == 'production' }} |"
+            echo ''
+            echo 'Este workflow NÃO publica. A publicação é ato separado e autorizado.'
+          } >> "$GITHUB_STEP_SUMMARY"

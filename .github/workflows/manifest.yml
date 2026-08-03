@@ -1,0 +1,133 @@
+# =============================================================================
+# Integridade da biblioteca de conteúdo.
+#
+# Contrato: docs/reference/CONTENT-LIBRARY-CONTRACT.md do workspace PlatformOps.
+#
+# O gate existe porque o modo offline-first do Desktop ESCONDE este defeito: uma
+# máquina que já sincronizou continua servindo a versão anterior, então um
+# manifest quebrado só aparece para quem instala do zero. Foi assim que três
+# bibliotecas ficaram rejeitadas sem ninguém notar.
+#
+# NÃO exige a chave privada. Assinar é ato de release, feito em job protegido
+# com secret store. Aqui verifica-se o que dá para verificar sem segredo:
+# manifest em dia, hashes corretos e o gerador funcionando.
+# =============================================================================
+name: Manifest
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: manifest-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  integridade:
+    name: Manifest em dia, hashes e testes do gerador
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+
+      # Go é para o `librarysign` do ensaio de release, no fim deste job.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.25.12'
+
+      # Roda antes do --check: se o gerador estiver quebrado, "manifest em dia"
+      # não significa nada.
+      - name: Testes do gerador
+        run: node scripts/manifest.test.mjs
+
+      # Reprova quando o conteúdo andou sem o manifest, e também quando alguém
+      # editou o manifest à mão. Nunca corrige: no CI, consertar a divergência
+      # esconde exatamente o defeito que o gate existe para revelar.
+      - name: Manifest em dia com app/
+        run: node scripts/manifest.mjs --check
+
+      - name: Árvore limpa (o --check não pode ter gravado)
+        run: git diff --exit-code
+
+      # `* text=auto eol=lf` é o que mantém os hashes estáveis num clone Windows.
+      # Sem ele, `core.autocrlf=true` entrega CRLF, os bytes mudam e o Desktop
+      # rejeita a biblioteca inteira por adulteração que não houve.
+      - name: .gitattributes normaliza fim de linha
+        run: |
+          set -euo pipefail
+          test -f .gitattributes || { echo "::error::.gitattributes ausente — hashes ficam instáveis em Windows."; exit 1; }
+          grep -qE '^\*\s+text=auto\s+eol=lf' .gitattributes \
+            || { echo "::error::.gitattributes não força eol=lf."; exit 1; }
+
+      # Ensaio completo do processo de release, com chave EFÊMERA gerada aqui:
+      # assina, verifica, monta o artefato dual e confere as duas posições.
+      #
+      # Prova o PROCESSO, nunca a autenticidade — e é por isso que o resultado
+      # não é persistido como artefato. Um pacote de teste guardado ao lado dos
+      # publicáveis é um convite a publicar o errado.
+      #
+      # A chave de produção NÃO entra aqui: PR roda em fork e com código não
+      # revisado. Assinar de verdade é `sign-content-library.yml`, em
+      # environment protegido com aprovação.
+      - name: Ensaio de release (chave efêmera, não publicável)
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --quiet https://github.com/skillops-brazil/platformops.git .ferramenta
+          COFRE="$RUNNER_TEMP/cofre-pr"
+          trap 'rm -rf "$COFRE"' EXIT
+          mkdir -p "$COFRE" && chmod 700 "$COFRE"
+
+          ( cd .ferramenta/platformops-core/app \
+            && LIBRARY_PRIVATE_KEY_FILE="$COFRE/priv.key" LIBRARY_PUBLIC_KEY_FILE="$COFRE/pub.key" \
+               go run ./tools/librarysign keygen >/dev/null )
+
+          cp app/manifest.sig "$COFRE/manifest.sig.original"
+          ( cd .ferramenta/platformops-core/app \
+            && LIBRARY_PRIVATE_KEY_FILE="$COFRE/priv.key" \
+               go run ./tools/librarysign sign "$GITHUB_WORKSPACE/app/manifest.json" )
+          ( cd .ferramenta/platformops-core/app \
+            && LIBRARY_PUBLIC_KEY_FILE="$COFRE/pub.key" \
+               go run ./tools/librarysign verify "$GITHUB_WORKSPACE/app/manifest.json" )
+
+          node scripts/build-compatible-library.mjs
+
+          # A propriedade que sustenta o layout duplo: um manifest, duas posições.
+          cmp dist/library/manifest.json dist/library/app/manifest.json \
+            || { echo "::error::manifest da raiz diverge do de app/."; exit 1; }
+
+          # E o que quase passou: caminho com prefixo `app/` no manifest da raiz
+          # verifica verde e entrega ZERO artefatos ao consumidor legado.
+          node -e '
+            const m = require("./dist/library/manifest.json");
+            const ruins = m.files.filter(f => f.path.startsWith("app/"));
+            if (ruins.length) { console.error("::error::prefixo app/ no manifest:", ruins.map(f=>f.path)); process.exit(1) }
+            const CONSUMIDOS = ["commands","runbooks","prompts","agents","patterns","templates","playbooks","workflows"];
+            const n = m.files.filter(f => CONSUMIDOS.includes(f.path.split("/")[0])).length;
+            if (!n) { console.error("::error::nenhum arquivo em diretório consumido — biblioteca seria servida vazia"); process.exit(1) }
+            console.log(`ensaio ok: ${m.fileCount} arquivos, ${n} consumíveis, signature_class=test, publishable=false`);
+          '
+
+          # A árvore volta ao estado revisado: o ensaio não deixa assinatura de
+          # teste no repositório.
+          cp "$COFRE/manifest.sig.original" app/manifest.sig
+          rm -rf dist .ferramenta
+          git diff --exit-code
+
+      # `--check` também valida schemaVersion, coerência de fileCount, formato
+      # dos hashes, ausência de caminho que escape de app/ e a presença do
+      # sidecar de assinatura. Essas asserções vivem no gerador, e não em
+      # `node -e` aqui: casar barra invertida através de YAML, shell e argv é
+      # frágil o bastante para o gate passar a validar a coisa errada em
+      # silêncio.
+      #
+      # A assinatura em si não é verificável neste job — a chave pública vive no
+      # binário do Desktop e a privada, no cofre. Exige-se presença e forma.

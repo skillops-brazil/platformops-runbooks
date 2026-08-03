@@ -1,0 +1,3 @@
+# Artefato de release montado por scripts/build-compatible-library.mjs.
+# Derivado de app/ — nunca versionado, sempre reconstruído.
+dist/
